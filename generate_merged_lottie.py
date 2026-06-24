@@ -2,13 +2,16 @@
 V7: 将两个静帧 Lottie JSON 合并为带切换动效的 Lottie JSON。
 
 核心策略（V7 重写要点）:
-1. 不靠图层名称识别静态图层（lottielab/AE等工具导出后 nm 字段常为空）
-   改用 position 坐标相近 + asset base64 内容相同 双重匹配
+1. 静态图层识别：7 维度完全匹配
+   （position 相近 + anchor/scale/rotation/parent 相同 + asset 内容相同）
+   不依赖图层名称（lottielab/AE 导出后 nm 常为空）
 2. comp asset 完整复制，不做内容去重（嵌套层级太深，去重容易自引用）
+   图片类 asset 按 base64 内容签名去重，避免同一张图存两份
 3. 只做 prefix 命名空间隔离：A 的 asset id 加 "a_" 前缀，B 的加 "b_"
    comp 内部子层的 refId 用 BFS 迭代同步更新（不递归，避免爆栈）
 4. 版本号、帧率、画布尺寸全部读取源文件，不硬编码
 5. 时间轴基于秒定义，通过 s2f() 换算为帧数，兼容任意帧率
+6. 动效参数（V6 风格）：弹性缓动 + 动态飞行距离 + overshoot/bounce
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 自查表（每次运行后核对）:
@@ -220,6 +223,18 @@ for l in layers_a:
 for l in layers_b:
     l['_sig'] = get_asset_sig(assets_b, l['refId'])
 
+# 补全 asset 尺寸（aw/ah），用于飞行距离计算
+def get_asset_dims(assets_list, ref_id):
+    for a in assets_list:
+        if a.get('id') == ref_id:
+            return a.get('w', 100), a.get('h', 100)
+    return 100, 100
+
+for l in layers_a:
+    l['aw'], l['ah'] = get_asset_dims(assets_a, l['refId'])
+for l in layers_b:
+    l['aw'], l['ah'] = get_asset_dims(assets_b, l['refId'])
+
 print("\n=== Layers A ===")
 for l in layers_a:
     print(f"  ind={l['ind']} ty={l['ty']} nm={repr(l['nm'])} pos=[{l['pos'][0]:.0f},{l['pos'][1]:.0f}] sig={l['_sig'][0]}")
@@ -227,24 +242,79 @@ print("\n=== Layers B ===")
 for l in layers_b:
     print(f"  ind={l['ind']} ty={l['ty']} nm={repr(l['nm'])} pos=[{l['pos'][0]:.0f},{l['pos'][1]:.0f}] sig={l['_sig'][0]}")
 
-# ── 识别静态图层：position 相近 AND asset 内容相同 ───────────────────────────
-# 自查点 5: 静态图层识别策略
-# 注意：不依赖图层名（nm），因为 lottielab/AE 导出后 nm 常为空字符串
-# 如果图层名有意义（设计师用 "bg:" "static:" 等前缀命名），可在此处增加名字匹配作为加分项
+# ── Asset 去重 ────────────────────────────────────────────────────────────────
+# 图片类 asset 按 base64 内容签名去重，避免同一张图存两份
+_img_sig = {}
+_asset_id_remap = {}
+_deduped_assets = []
+for a in all_assets:
+    if 'layers' in a:
+        _deduped_assets.append(a)
+        continue
+    sig = (a.get('p') or '')[:80]
+    if sig in _img_sig:
+        _asset_id_remap[a['id']] = _img_sig[sig]
+    else:
+        _img_sig[sig] = a['id']
+        _deduped_assets.append(a)
+
+if _asset_id_remap:
+    n = len(_asset_id_remap)
+    print(f"\nAsset 去重: {n} 个重复 image asset 已合并")
+    for l in layers_a + layers_b:
+        rid = l.get('refId', '')
+        if rid in _asset_id_remap:
+            l['refId'] = _asset_id_remap[rid]
+    for a in _deduped_assets:
+        if 'layers' in a:
+            for sub in a['layers']:
+                rid = sub.get('refId', '')
+                if rid in _asset_id_remap:
+                    sub['refId'] = _asset_id_remap[rid]
+    all_assets = _deduped_assets
+    print(f"  Assets: {len(all_assets)} (was {len(all_assets) + n})")
+else:
+    print("\nAsset 去重: 无重复")
+
+# ── 识别静态图层：7 维度完全匹配 ──────────────────────────────────────────
+# 两个图层必须同时满足以下所有条件才视为静态（不变元素）：
+#   1. position 相近（容差 2px）   ← 调用前已检查
+#   2. anchor   相近（容差 0.1）
+#   3. scale    相近（容差 0.1%）
+#   4. rotation 相同（容差 0.01°）
+#   5. parent   相同（均为 None 或相同 int）
+#   6. ty       相同（图层类型一致）
+#   7. asset 内容相同（图片: base64 前80字符; 形状: 视为相同）
 def pos_near(pa, pb, tol=2.0):
     return abs(pa[0] - pb[0]) < tol and abs(pa[1] - pb[1]) < tol
 
-def is_same_asset(la, lb):
-    """判断两个图层是否为同一内容（用于识别静态图层）:
-    - 图片类(ty=2): base64 前 80 字符相同
-    - 形状类(ty=4): 位置相同即认为静态
-    - comp类(ty=0): 通常 A/B 文件的 comp 内容不同，不认为相同
-    """
-    if la['ty'] == 4 and lb['ty'] == 4:
-        return pos_near(la['pos'], lb['pos'])
+def transforms_same(la, lb):
+    """检查两个图层的变换属性是否相同（anchor/scale/rotation/parent）"""
+    # parent
+    if la['parent'] != lb['parent']:
+        return False
+    # anchor
+    if abs(la['anc'][0] - lb['anc'][0]) >= 0.1: return False
+    if abs(la['anc'][1] - lb['anc'][1]) >= 0.1: return False
+    # scale
+    if abs(la['scl'][0] - lb['scl'][0]) >= 0.1: return False
+    if abs(la['scl'][1] - lb['scl'][1]) >= 0.1: return False
+    # rotation
+    if abs(la['rot'] - lb['rot']) >= 0.01: return False
+    return True
+
+def is_static_pair(la, lb):
+    """判断两个图层是否应被视为静态（内容+变换完全相同）"""
+    if la['ty'] != lb['ty']:
+        return False
+    if not transforms_same(la, lb):
+        return False
+    # asset 内容检查
     if la['_sig'][0] == 'img' and lb['_sig'][0] == 'img':
         return la['_sig'][1] == lb['_sig'][1]
-    return False
+    if la['ty'] == 4 and lb['ty'] == 4:
+        return True  # 形状层：变换已检查完毕
+    return False  # comp 层内容通常不同
 
 static_a, static_b = [], []
 fg_a, fg_b = [], []
@@ -255,7 +325,7 @@ for la in layers_a:
     for i, lb in enumerate(layers_b):
         if i in matched_b:
             continue
-        if pos_near(la['pos'], lb['pos']) and is_same_asset(la, lb):
+        if pos_near(la['pos'], lb['pos']) and is_static_pair(la, lb):
             static_a.append(la)
             static_b.append(lb)
             matched_b.add(i)
@@ -291,56 +361,92 @@ for l in fg_a: l['dir'] = get_direction(l['pos'])
 for l in fg_b: l['dir'] = get_direction(l['pos'])
 
 # ── 缓动曲线 ─────────────────────────────────────────────────────────────────
-EI_OUT = {"x": [0.167], "y": [0.167]}
-EO_OUT = {"x": [0.833], "y": [0.833]}
-EI_IN  = {"x": [0.667], "y": [1.0]}
-EO_IN  = {"x": [0.333], "y": [0.0]}
+# 基础缓动（V6 风格）
+EASE_OUT     = {"x": [0.333], "y": [0.0]}
+EASE_IN      = {"x": [0.667], "y": [1.0]}
+# 弹性缓动：产生 overshoot 回弹效果
+EASE_SNAPPY_I = {"x": [0.667], "y": [0.667]}
+EASE_SNAPPY_O = {"x": [0.333], "y": [0.333]}
 
 def kf(t, s, ei=None, eo=None):
-    if ei is None: ei = EI_OUT
-    if eo is None: eo = EO_OUT
+    if ei is None: ei = EASE_OUT
+    if eo is None: eo = EASE_OUT
     v = [s] if isinstance(s, (int, float)) else list(s)
     return {"i": {"x": list(ei["x"]), "y": list(ei["y"])},
             "o": {"x": list(eo["x"]), "y": list(eo["y"])},
             "t": t, "s": v}
 
-# ── 飞入/飞出偏移量 ──────────────────────────────────────────────────────────
-def fly_offset(direction, dist=500):
-    """返回画面外的偏移量 (dx, dy)，元素从这个位置飞入"""
-    if direction == 'left':   return (-dist, 0)
-    if direction == 'right':  return ( dist, 0)
-    if direction == 'bottom': return (0,  dist)
-    if direction == 'top':    return (0, -dist)
-    return (0, 0)  # center: 纯淡入淡出
+# ── 飞行距离 ─────────────────────────────────────────────────────────────────
+def get_flight_distance(x, y, direction, aw, ah, ax, ay, sx, sy):
+    """基于元素视觉边界计算飞出画布的偏移量（V6 方案）。
+    visual_left  = x - ax * sx
+    visual_top   = y - ay * sy
+    visual_right = visual_left + aw * sx
+    visual_bottom= visual_top  + ah * sy
+    """
+    vl = x - ax * sx
+    vt = y - ay * sy
+    vr = vl + aw * sx
+    vb = vt + ah * sy
+    margin = 80
 
-# ── 位置关键帧 ───────────────────────────────────────────────────────────────
+    if direction == "left":
+        dx_in = (-margin) - vr     # 右边缘移出左边界
+        return (dx_in, 0), (-dx_in * 0.06, 0)
+    elif direction == "right":
+        dx_in = (W + margin) - vl  # 左边缘移出右边界
+        return (dx_in, 0), (-dx_in * 0.06, 0)
+    elif direction == "bottom":
+        dy_in = (H + margin) - vt  # 上边缘移出下边界
+        return (0, dy_in), (0, -dy_in * 0.06)
+    elif direction == "top":
+        dy_in = (-margin) - vb     # 下边缘移出上边界
+        return (0, dy_in), (0, -dy_in * 0.06)
+    else:
+        return (0, 0), (0, 0)
+
+# ── 位置关键帧（含 overshoot + bounce）───────────────────────────────────────
 def build_pos_kfs(l, enter_s, enter_e, exit_s, exit_e, initially_visible, stagger=0):
     x, y, z = l['pos']
-    dx, dy = fly_offset(l['dir'])
-    off_x, off_y = x + dx, y + dy
+    ax = l['anc'][0]; ay = l['anc'][1]
+    sx = l['scl'][0] / 100.0; sy = l['scl'][1] / 100.0
+    aw = l.get('aw', 100); ah = l.get('ah', 100)
+
+    (dx_in, dy_in), (dx_os, dy_os) = get_flight_distance(
+        x, y, l['dir'], aw, ah, ax, ay, sx, sy)
+
+    entry_x   = x + dx_in
+    entry_y   = y + dy_in
+    overshoot_x = x + dx_os if l['dir'] != "center" else x
+    overshoot_y = y + dy_os if l['dir'] != "center" else y
     es, ee = enter_s + stagger, enter_e + stagger
     xs, xe = exit_s, exit_e
+    t_bounce = ee + 6
     def p3(px, py): return [px, py, z]
 
-    if l['dir'] == 'center':
-        return None  # center 方向只做透明度，位置不动
-
+    kfs = []
     if initially_visible:
-        return sorted([
-            kf(0,  p3(x, y)),
-            kf(xs, p3(x, y),        EI_IN, EO_IN),
-            kf(xe, p3(off_x, off_y)),
-            kf(es, p3(off_x, off_y)),
-            kf(ee, p3(x, y),        EI_IN, EO_IN),
-        ], key=lambda k: k['t'])
+        kfs.append(kf(0,  p3(x, y)))
+        # 退场
+        kfs.append(kf(xs, p3(x, y),            EASE_IN, EASE_OUT))
+        kfs.append(kf(xe, p3(entry_x, entry_y), EASE_OUT, EASE_OUT))
+        # 入场（含 overshoot + bounce）
+        kfs.append(kf(es, p3(entry_x, entry_y), EASE_IN, EASE_OUT))
+        kfs.append(kf(ee, p3(overshoot_x, overshoot_y),
+                      EASE_SNAPPY_I, EASE_SNAPPY_O))
+        kfs.append(kf(t_bounce, p3(x, y),      EASE_OUT, EASE_OUT))
     else:
-        return sorted([
-            kf(0,  p3(off_x, off_y)),
-            kf(es, p3(off_x, off_y)),
-            kf(ee, p3(x, y),        EI_IN, EO_IN),
-            kf(xs, p3(x, y),        EI_IN, EO_IN),
-            kf(xe, p3(off_x, off_y)),
-        ], key=lambda k: k['t'])
+        kfs.append(kf(0,  p3(entry_x, entry_y), EASE_OUT, EASE_OUT))
+        # 入场（含 overshoot + bounce）
+        kfs.append(kf(es, p3(entry_x, entry_y), EASE_IN, EASE_OUT))
+        kfs.append(kf(ee, p3(overshoot_x, overshoot_y),
+                      EASE_SNAPPY_I, EASE_SNAPPY_O))
+        kfs.append(kf(t_bounce, p3(x, y),      EASE_OUT, EASE_OUT))
+        # 退场
+        kfs.append(kf(xs, p3(x, y),            EASE_IN, EASE_OUT))
+        kfs.append(kf(xe, p3(entry_x, entry_y), EASE_OUT, EASE_OUT))
+
+    return sorted(kfs, key=lambda k: k['t'])
 
 # ── 透明度关键帧 ─────────────────────────────────────────────────────────────
 # 自查点 7: FADE 帧数影响视觉效果，可改为 s2f(0.15) 更安全
@@ -352,18 +458,18 @@ def build_opa_kfs(enter_s, enter_e, exit_s, exit_e, initially_visible, stagger=0
     if initially_visible:
         return sorted([
             kf(0,        [100]),
-            kf(xs,       [100], EI_IN, EO_IN),
-            kf(xs+FADE,  [0]),
+            kf(xs,       [100], EASE_IN, EASE_IN),
+            kf(xs+FADE,  [0],   EASE_IN, EASE_IN),
             kf(es,       [0]),
-            kf(es+FADE,  [100]),
+            kf(es+FADE,  [100], EASE_OUT, EASE_OUT),
         ], key=lambda k: k['t'])
     else:
         return sorted([
             kf(0,        [0]),
             kf(es,       [0]),
-            kf(es+FADE,  [100]),
-            kf(xs,       [100], EI_IN, EO_IN),
-            kf(xs+FADE,  [0]),
+            kf(es+FADE,  [100], EASE_OUT, EASE_OUT),
+            kf(xs,       [100], EASE_IN, EASE_IN),
+            kf(xs+FADE,  [0],   EASE_IN, EASE_IN),
         ], key=lambda k: k['t'])
 
 # ── 构建图层 JSON ─────────────────────────────────────────────────────────────
@@ -409,7 +515,7 @@ def make_anim_layer(l, tag, enter_s, enter_e, exit_s, exit_e, initially_visible,
     layer["ks"] = {
         "o": {"a": 1, "k": opa_kfs},
         "r": {"a": 0, "k": l['rot']},
-        "p": {"a": 1, "k": pos_kfs} if pos_kfs is not None else {"a": 0, "k": l['pos']},
+        "p": {"a": 1, "k": pos_kfs},
         "a": {"a": 0, "k": l['anc']},
         "s": {"a": 0, "k": l['scl']},
     }
