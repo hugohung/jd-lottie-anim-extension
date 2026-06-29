@@ -94,30 +94,29 @@ H   = src_a.get('h', 600)
 V   = src_a.get('v', '5.7.5')   # ← 保留源文件版本号
 
 # 自查点 2: 时间轴基于秒定义，s2f() 换算，兼容任意帧率
+# V6 风格：A退场和B入场用同一窗口，center元素自然交叉溶解，无需特殊处理
 def s2f(sec): return round(sec * FPS)
 
-T_TOTAL  = 5.5   # 总时长（秒）
-T_A_END  = 1.5   # A 静置结束
-T_AB_MID = 2.0   # A→B 切换中点
-T_B_END  = 3.5   # B 静置结束
-T_BA_MID = 4.0   # B→A 切换中点
+T_TOTAL  = 5.0   # 总时长（秒）
+T_A_HOLD = 1.0   # A 静置结束 / A→B 切换窗口开始
+T_SWITCH1 = 1.5  # A→B 切换窗口结束（A退场+B入场 同窗口）
+T_B_HOLD = 3.5   # B 静置结束 / B→A 切换窗口开始
+T_SWITCH2 = 4.0  # B→A 切换窗口结束（B退场+A入场 同窗口）
 
 F_TOTAL     = s2f(T_TOTAL)
-F_A_EXIT_S  = s2f(T_A_END)
-F_A_EXIT_E  = s2f(T_AB_MID)
-F_B_ENTER_S = s2f((T_A_END + T_AB_MID) / 2)
-F_B_ENTER_E = s2f(T_AB_MID + 0.15)
-F_B_EXIT_S  = s2f(T_B_END)
-F_B_EXIT_E  = s2f(T_BA_MID)
-F_A_ENTER_S = s2f((T_B_END + T_BA_MID) / 2)
-F_A_ENTER_E = s2f(T_BA_MID + 0.15)
+F_A_EXIT_S  = s2f(T_A_HOLD)    # A退场开始 = B入场开始
+F_A_EXIT_E  = s2f(T_SWITCH1)   # A退场结束 = B入场结束
+F_B_ENTER_S = s2f(T_A_HOLD)    # B入场开始 = A退场开始（同一窗口！）
+F_B_ENTER_E = s2f(T_SWITCH1)   # B入场结束 = A退场结束
+F_B_EXIT_S  = s2f(T_B_HOLD)    # B退场开始 = A入场开始
+F_B_EXIT_E  = s2f(T_SWITCH2)   # B退场结束 = A入场结束
+F_A_ENTER_S = s2f(T_B_HOLD)    # A入场开始 = B退场开始（同一窗口！）
+F_A_ENTER_E = s2f(T_SWITCH2)   # A入场结束 = B退场结束
 
 print(f"FPS={FPS}  v={V}  W={W}  H={H}")
 print(f"TOTAL={F_TOTAL}f ({T_TOTAL}s)")
-print(f"A exit:  {F_A_EXIT_S}→{F_A_EXIT_E}")
-print(f"B enter: {F_B_ENTER_S}→{F_B_ENTER_E}")
-print(f"B exit:  {F_B_EXIT_S}→{F_B_EXIT_E}")
-print(f"A enter: {F_A_ENTER_S}→{F_A_ENTER_E}")
+print(f"A→B 切换: {F_A_EXIT_S}→{F_A_EXIT_E} (A退场+B入场 同窗口)")
+print(f"B→A 切换: {F_B_EXIT_S}→{F_B_EXIT_E} (B退场+A入场 同窗口)")
 
 # ── Assets: 前缀命名空间隔离 ─────────────────────────────────────────────────
 # 自查点 3+4: 每个来源独立加前缀，comp 内部子层 refId 用 BFS 迭代同步更新
@@ -457,51 +456,33 @@ def build_pos_kfs(l, enter_s, enter_e, exit_s, exit_e, initially_visible, stagge
 
     return sorted(kfs, key=lambda k: k['t'])
 
-# ── 透明度关键帧 ─────────────────────────────────────────────────────────────
-# 自查点 7: FADE 帧数影响视觉效果，可改为 s2f(0.15) 更安全
-FADE = 8  # 淡入淡出帧数（100fps 下 = 0.08s，30fps 下 = 0.27s）
+# ── 透明度关键帧（V6 简单逻辑，不区分 center/non-center）──────────────────────
+# A退场窗口 = B入场窗口（同一窗口），center元素自然交叉溶解，无需特殊处理
+FADE = 8  # 淡入淡出帧数
 
-def build_opa_kfs(enter_s, enter_e, exit_s, exit_e, initially_visible, stagger=0, is_center=False,
-                    cf_start=None):
+def build_opa_kfs(enter_s, enter_e, exit_s, exit_e, initially_visible, stagger=0):
+    """opacity 与 position 窗口完全对齐，不搞交叉溶解特殊逻辑"""
     es = enter_s + stagger
+    ee = enter_e + stagger
     xs = exit_s
+    xe = exit_e
     if initially_visible:
-        if is_center and cf_start is not None:
-            # ★ center方向A: 对方退场时A就开始入场（交叉溶解）
-            cfs = cf_start
-            return sorted([
-                kf(0,        [100]),
-                kf(xs,       [100], EASE_IN, EASE_IN),   # 正常退场
-                kf(xs+FADE,  [0],   EASE_IN, EASE_IN),
-                kf(cfs,       [0]),                        # 对方退场时A就入场
-                kf(cfs+FADE,  [100], EASE_OUT, EASE_OUT),
-            ], key=lambda k: k['t'])
+        # A: 可见 → 退场淡出 → 不可见 → 入场淡入 → 可见
         return sorted([
-            kf(0,        [100]),
-            kf(xs,       [100], EASE_IN, EASE_IN),
-            kf(xs+FADE,  [0],   EASE_IN, EASE_IN),
-            kf(es,       [0]),
-            kf(es+FADE,  [100], EASE_OUT, EASE_OUT),
+            kf(0,   [100]),
+            kf(xs,  [100], EASE_IN,  EASE_IN),
+            kf(xe,  [0],   EASE_IN,  EASE_IN),
+            kf(es,  [0]),
+            kf(ee,  [100], EASE_OUT, EASE_OUT),
         ], key=lambda k: k['t'])
     else:
-        if is_center and cf_start is not None:
-            # ★ center方向B: 交叉溶解！
-            # 从对方退场时刻(cf_start)就开始入场，与对方退场同步反向渐变
-            # 消除"空窗期闪烁"
-            cfs = cf_start
-            return sorted([
-                kf(0,        [0]),
-                kf(cfs,       [0]),                     # 对方开始退场时B就入场
-                kf(cfs+FADE,  [100], EASE_OUT, EASE_OUT),  # 对方完全消失时B完全显示
-                kf(xs,       [100], EASE_IN, EASE_IN),  # B退场（正常下半周期）
-                kf(xs+FADE,  [0],   EASE_IN, EASE_IN),
-            ], key=lambda k: k['t'])
+        # B: 不可见 → 入场淡入 → 可见 → 退场淡出 → 不可见
         return sorted([
-            kf(0,        [0]),
-            kf(es,       [0]),
-            kf(es+FADE,  [100], EASE_OUT, EASE_OUT),
-            kf(xs,       [100], EASE_IN, EASE_IN),
-            kf(xs+FADE,  [0],   EASE_IN, EASE_IN),
+            kf(0,   [0]),
+            kf(es,  [0]),
+            kf(ee,  [100], EASE_OUT, EASE_OUT),
+            kf(xs,  [100], EASE_IN,  EASE_IN),
+            kf(xe,  [0],   EASE_IN,  EASE_IN),
         ], key=lambda k: k['t'])
 
 # ── 构建图层 JSON ─────────────────────────────────────────────────────────────
@@ -540,12 +521,10 @@ def make_static_layer(l, tag):
     }
     return layer
 
-def make_anim_layer(l, tag, enter_s, enter_e, exit_s, exit_e, initially_visible, stagger=0,
-                    cf_start=None):
-    """cf_start: 交叉溶解起始帧（对方退场时刻），仅 center+B 使用"""
+def make_anim_layer(l, tag, enter_s, enter_e, exit_s, exit_e, initially_visible, stagger=0):
+    """V6 简单逻辑：不区分 center/non-center"""
     pos_kfs = build_pos_kfs(l, enter_s, enter_e, exit_s, exit_e, initially_visible, stagger)
-    is_center = (l.get('dir') == 'center')
-    opa_kfs = build_opa_kfs(enter_s, enter_e, exit_s, exit_e, initially_visible, stagger, is_center, cf_start)
+    opa_kfs = build_opa_kfs(enter_s, enter_e, exit_s, exit_e, initially_visible, stagger)
     layer = _layer_base(l, tag)
     layer["ks"] = {
         "o": {"a": 1, "k": opa_kfs},
@@ -573,18 +552,14 @@ def calc_stagger(i, l, H):
     return i * 3 + bonus
 
 for i, l in enumerate(sorted(fg_b, key=lambda l: l['ind'])):
-    _cfs = F_A_EXIT_S if (l.get('dir') == 'center') else None
     out_layers.append(make_anim_layer(l, 'b',
         F_B_ENTER_S, F_B_ENTER_E, F_B_EXIT_S, F_B_EXIT_E,
-        initially_visible=False, stagger=calc_stagger(i, l, H),
-        cf_start=_cfs))
+        initially_visible=False, stagger=calc_stagger(i, l, H)))
 
 for i, l in enumerate(sorted(fg_a, key=lambda l: l['ind'])):
-    _cfs = F_B_EXIT_S if (l.get('dir') == 'center') else None
     out_layers.append(make_anim_layer(l, 'a',
         F_A_ENTER_S, F_A_ENTER_E, F_A_EXIT_S, F_A_EXIT_E,
-        initially_visible=True, stagger=calc_stagger(i, l, H),
-        cf_start=_cfs))
+        initially_visible=True, stagger=calc_stagger(i, l, H)))
 
 for l in static_bot:
     out_layers.append(make_static_layer(l, 'a'))
@@ -618,6 +593,37 @@ if bad_refs:
 else:
     print("\n✅ All refIds valid")
 
+# ── 自查点 9: 循环衔接一致性验证（首帧=尾帧） ───────────────────────────────
+# 循环播放时，t=0 的状态必须与 t=OP(总帧) 完全一致，否则会产生跳变/闪烁
+# 关键修复：即使数据上首尾值相等也必须显式补入 t=OP 关键帧
+# 因为 lottie 从 OP 跳回 0 时如果没有明确的 OP 锚点，可能产生插值异常
+from copy import deepcopy as _dc
+
+loop_fixed = 0
+for l in out_layers:
+    for prop in ['o', 'p']:
+        ks = l['ks'].get(prop, {})
+        if ks.get('a') != 1:
+            continue
+        kfs = ks['k']
+        if not kfs:
+            continue
+        v_start = kfs[0]['s']  # t=0 的值（这就是循环回到开头时的状态）
+        
+        # 无条件在 t=F_TOTAL 处补入一个与 t=0 完全相同的关键帧
+        # 这样 lottie 在 OP 处有明确锚点，确保无缝循环
+        new_kf = _dc(kfs[0])
+        new_kf['t'] = F_TOTAL
+        new_kf['s'] = list(v_start) if isinstance(v_start, list) else v_start
+        # 清除缓动信息（循环点不需要缓动）
+        new_kf.pop('i', None)
+        new_kf.pop('o', None)
+        kfs.append(new_kf)
+        kfs.sort(key=lambda k: k['t'])
+        loop_fixed += 1
+
+print(f"✅ 循环衔接: 为所有动画属性在 t={F_TOTAL} 处补入首帧锚点 (共 {loop_fixed} 处)")
+
 # ── 输出 ──────────────────────────────────────────────────────────────────────
 output = {
     "v":    V,        # 自查点 1: 源文件版本号
@@ -638,31 +644,32 @@ with open(OUTPUT, 'w', encoding='utf-8') as f:
 
 # ── 生成预览 HTML（含下载按钮）────────────────────────────────────────────────
 # 修复：使用 jsdelivr CDN（国内可用）+ fetch 加载 JSON（避免内嵌大文件导致问题）
+# 修复：不用 IIFE，anim/ss/dlJson 必须是全局变量，否则 onclick 访问不到
 PREVIEW = os.path.join(OUTPUT_DIR, 'preview.html')
 
-html = f'''<!DOCTYPE html>
+# 注意：不用 f-string，避免 JS 花括号转义混乱
+html = '''<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><title>Lottie 切换动效预览</title>
 <style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:#1a1a2e;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:-apple-system,sans-serif;color:#eee}}
-h2{{margin-bottom:16px;font-weight:400;color:#aaa;font-size:16px}}
-#lc{{width:562px;height:300px;background:#222;border-radius:8px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.4)}}
-.ctl{{margin-top:20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center}}
-button{{padding:8px 20px;border:1px solid #555;border-radius:6px;background:#2a2a4a;color:#eee;cursor:pointer;font-size:14px}}
-button:hover{{background:#3a3a6a}}
-.sp button{{background:#222}}.sp button.active{{background:#5a5aff;border-color:#5a5aff}}
-#dl-btn{{background:#1a4a2a;border-color:#2a7a4a;color:#7ef5a0}}
-#dl-btn:hover{{background:#1e5a32}}
-#fi,#st{{font-size:13px;margin-top:10px;min-height:20px}}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:-apple-system,sans-serif;color:#eee}
+h2{margin-bottom:16px;font-weight:400;color:#aaa;font-size:16px}
+#lc{width:562px;height:300px;background:#222;border-radius:8px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.ctl{margin-top:20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center}
+button{padding:8px 20px;border:1px solid #555;border-radius:6px;background:#2a2a4a;color:#eee;cursor:pointer;font-size:14px}
+button:hover{background:#3a3a6a}
+.sp button{background:#222}.sp button.active{background:#5a5aff;border-color:#5a5aff}
+#dl-btn{background:#1a4a2a;border-color:#2a7a4a;color:#7ef5a0}
+#dl-btn:hover{background:#1e5a32}
+#fi,#st{font-size:13px;margin-top:10px;min-height:20px}
 </style></head>
 <body>
 <h2>Lottie 切换动效预览</h2>
 <div id="lc"></div>
 <div class="ctl">
-  <button onclick="anim&&anim.play()">&#9654; 播放</button>
-  <button onclick="anim&&anim.pause()">&#9208; 暂停</button>
-  <button onclick="anim&&anim.goToAndPlay(0,true)">&#8634; 重播</button>
+  <button onclick="doToggle()" id="btnToggle">&#9208; 暂停</button>
+  <button onclick="doReplay()">&#8634; 重播</button>
   <div class="sp">
     <button onclick="ss(0.5)" id="s05">0.5x</button>
     <button onclick="ss(1)" id="s10" class="active">1x</button>
@@ -673,78 +680,166 @@ button:hover{{background:#3a3a6a}}
 <div id="fi"></div>
 <div id="st" style="color:#ff8">加载中...</div>
 <script>
-(function(){{
-  var st=document.getElementById('st'),fi=document.getElementById('fi'),anim=null,jsonData=null;
-  var CDN_URLS=[
-    "https://cdn.jsdelivr.net/npm/lottie-web@5.12.2/build/player/lottie.min.js",
-    "https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"
-  ];
-  var cdnIdx=0;
+// 全局变量（onclick 必须能访问到）
+var st = document.getElementById('st');
+var fi = document.getElementById('fi');
+var anim = null;
+var jsonData = null;
 
-  function ss(s){{if(anim)anim.setSpeed(s);document.querySelectorAll('.sp button').forEach(function(b){{b.classList.remove('active')}});document.getElementById('s'+(s+'').replace('.','0')).classList.add('active')}}
-  function dlJson(){{
-    if(!jsonData){{alert('JSON 尚未加载完成，请稍后再试');return}}
-    var blob=new Blob([JSON.stringify(jsonData,null,2)],{{type:'application/json'}});
-    var a=document.createElement('a');
-    a.href=URL.createObjectURL(blob);
-    a.download='merged_output.json';
-    a.style.display='none';
+var CDN_URLS = [
+  "https://cdn.jsdelivr.net/npm/lottie-web@5.12.2/build/player/lottie.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"
+];
+var FSAVER_URLS = [
+  "https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"
+];
+var cdnIdx = 0;
+
+function doToggle() {
+  if (!anim) return;
+  var btn = document.getElementById('btnToggle');
+  if (anim.isPaused) {
+    anim.play();
+    btn.innerHTML = '&#9208; 暂停';
+  } else {
+    anim.pause();
+    btn.innerHTML = '&#9654; 播放';
+  }
+}
+function doReplay() {
+  if (anim) {
+    anim.goToAndPlay(0, true);
+    document.getElementById('btnToggle').innerHTML = '&#9208; 暂停';
+  }
+}
+function ss(s) {
+  if (anim) anim.setSpeed(s);
+  document.querySelectorAll('.sp button').forEach(function(b) {
+    b.classList.remove('active');
+  });
+  var btnId = 's' + (s + '').replace('.', '0');
+  var btn = document.getElementById(btnId);
+  if (btn) btn.classList.add('active');
+}
+function dlJson() {
+  if (!jsonData) { alert('JSON 尚未加载完成'); return; }
+  var data = JSON.stringify(jsonData, null, 2);
+  // 用 FileSaver.js saveAs() 确保文件名正确（原生 a.download 对 blob URL 可能失效）
+  var blob = new Blob([data], {type: 'application/json;charset=utf-8'});
+  if (typeof saveAs === 'function') {
+    saveAs(blob, 'merged_output.json');
+  } else {
+    // FileSaver 未加载时的降级方案
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'merged_output.json';
     document.body.appendChild(a);
     a.click();
-    setTimeout(function(){{document.body.removeChild(a);URL.revokeObjectURL(a.href)}},100);
-  }}
+    setTimeout(function() {
+      if (a.parentNode) document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 2000);
+  }
+}
 
-  function loadCdn(cb){{
-    var s=document.createElement('script');
-    s.src=CDN_URLS[cdnIdx];
-    s.onload=function(){{cb(null)}};
-    s.onerror=function(){{
-      cdnIdx++;
-      if(cdnIdx<CDN_URLS.length){{loadCdn(cb)}}
-      else{{cb(new Error('所有CDN均失败'))}}
-    }};
+function loadCdn(cb) {
+  var s = document.createElement('script');
+  s.src = CDN_URLS[cdnIdx];
+  s.onload = function() { cb(null); };
+  s.onerror = function() {
+    cdnIdx++;
+    if (cdnIdx < CDN_URLS.length) {
+      loadCdn(cb);
+    } else {
+      cb(new Error('所有CDN均失败'));
+    }
+  };
+  document.head.appendChild(s);
+}
+
+function loadFileSaver(cb) {
+  var fsIdx = 0;
+  function tryNext() {
+    var s = document.createElement('script');
+    s.src = FSAVER_URLS[fsIdx];
+    s.onload = function() { cb(null); };
+    s.onerror = function() {
+      fsIdx++;
+      if (fsIdx < FSAVER_URLS.length) {
+        tryNext();
+      } else {
+        cb(new Error('FileSaver CDN 失败（降级使用原生下载）'));
+      }
+    };
     document.head.appendChild(s);
-  }}
+  }
+  tryNext();
+}
 
-  function initAnimation(){{
-    try{{
-      anim=lottie.loadAnimation({{container:document.getElementById('lc'),renderer:'svg',loop:true,autoplay:true,animationData:jsonData}});
-      anim.addEventListener('enterFrame',function(){{fi.textContent='帧: '+Math.round(anim.currentFrame)+' / '+anim.totalFrames}});
-      anim.addEventListener('data_ready',function(){{st.style.color='#8f8';st.textContent='✅ 加载完成，正在播放...'}});
-      anim.addEventListener('data_failed',function(){{st.style.color='#f88';st.textContent='❌ 数据解析失败'}});
-      anim.addEventListener('error',function(e){{st.style.color='#f88';st.textContent='渲染错误: '+(e.error?e.error.message:JSON.stringify(e))}});
-    }}catch(e){{st.style.color='#f88';st.textContent='初始化失败: '+e.message}}
-  }}
+function initAnimation() {
+  try {
+    anim = lottie.loadAnimation({
+      container: document.getElementById('lc'),
+      renderer: 'svg',
+      loop: true,
+      autoplay: true,
+      animationData: jsonData
+    });
+    anim.addEventListener('enterFrame', function() {
+      fi.textContent = '帧: ' + Math.round(anim.currentFrame) + ' / ' + anim.totalFrames;
+    });
+    anim.addEventListener('data_ready', function() {
+      st.style.color = '#8f8';
+      st.textContent = '✅ 加载完成，正在播放...';
+    });
+    anim.addEventListener('data_failed', function() {
+      st.style.color = '#f88';
+      st.textContent = '❌ 数据解析失败';
+    });
+    anim.addEventListener('error', function(e) {
+      st.style.color = '#f88';
+      st.textContent = '渲染错误: ' + (e.error ? e.error.message : JSON.stringify(e));
+    });
+  } catch(e) {
+    st.style.color = '#f88';
+    st.textContent = '初始化失败: ' + e.message;
+  }
+}
 
-  // 第一步：通过 fetch 加载 JSON 文件
-  st.textContent='正在加载动画数据...';
-  fetch('merged_output.json')
-    .then(function(r){{
-      if(!r.ok) throw new Error('HTTP '+r.status);
-      return r.json();
-    }})
-    .then(function(d){{
-      jsonData=d;
-      st.textContent='Lottie库加载中...';
-      // 第二步：加载 lottie-web（优先 jsdelivr，备用 cdnjs）
-      loadCdn(function(err){{
-        if(err){{
-          st.style.color='#f88';
-          st.textContent='❌ Lottie库加载失败: '+err.message+' (请检查网络或刷新重试)';
-          return;
-        }}
-        if(typeof lottie==='undefined'){{
-          st.style.color='#f88';st.textContent='❌ Lottie对象未定义';
-          return;
-        }}
-        initAnimation();
-      }});
-    }})
-    .catch(function(err){{
-      st.style.color='#f88';
-      st.textContent='❌ 数据加载失败: '+err.message;
-    }});
-}})();
+// 第一步：fetch 加载 JSON（加时间戳破坏浏览器缓存）
+var ts = new Date().getTime();
+st.textContent = '正在加载动画数据...';
+fetch('merged_output.json?t=' + ts)
+  .then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(function(d) {
+    jsonData = d;
+    st.textContent = 'Lottie库加载中...';
+    // 第二步：加载 lottie-web
+    loadCdn(function(err) {
+      if (err) {
+        st.style.color = '#f88';
+        st.textContent = '❌ Lottie库加载失败: ' + err.message + ' (请检查网络或刷新重试)';
+        return;
+      }
+      if (typeof lottie === 'undefined') {
+        st.style.color = '#f88';
+        st.textContent = '❌ Lottie对象未定义';
+        return;
+      }
+      initAnimation();
+      // 预加载 FileSaver.js（下载功能需要）
+      loadFileSaver(function() {});
+    });
+  })
+  .catch(function(err) {
+    st.style.color = '#f88';
+    st.textContent = '❌ 数据加载失败: ' + err.message;
+  });
 </script>
 </body></html>'''
 

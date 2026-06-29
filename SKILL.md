@@ -1,7 +1,7 @@
 ---
 name: jd-lottie-anim-extension
 description: 将两个静帧 Lottie JSON 合并为带切帧动效的 Lottie JSON，自动识别静态图层并生成平滑的入场/退场动画。
-version: "2.0.0"
+version: "8.0.0"
 author: honghaoxiang
 agent_created: true
 trigger:
@@ -13,311 +13,233 @@ trigger:
   - 自动生成Lottie动画
 ---
 
-# Lottie 静帧合并动效 Skill
+# Lottie 静帧合并动效 — AI 执行指南
 
-## 功能描述
+## 一句话说明
 
-将两个相同背景、不同前景的 Lottie 静帧 JSON 文件，自动合并为一个带有平滑切帧动效的 Lottie JSON。
+把两张相同背景、不同前景的 Lottie 静帧图，合成一个循环播放的切换动效。
 
-**核心能力：**
-1. 自动识别静态图层（背景、腰封等不变元素）
-2. 自动识别前景变化图层
-3. 生成专业的入场/退场动画（支持左/右/下/中方向）
-4. 保留图层父子关系（parent）
-5. 保留旋转、锚点、混合模式等属性
-6. 输出可直接在 Lottie 播放器播放的 JSON
-
-## 使用方法
-
-### 基本用法
+## 快速执行
 
 ```bash
-python generate_merged_lottie.py <文件A.json> <文件B.json> [输出目录]
+python scripts/generate_merged_lottie.py <场景A.json> <场景B.json> [输出目录]
 ```
 
-**参数说明：**
-- `文件A.json`：第一个静帧 Lottie 文件（通常是初始状态）
-- `文件B.json`：第二个静帧 Lottie 文件（通常是变化后状态）
-- `输出目录`（可选）：输出文件存放目录，默认为脚本所在目录
+**必须遵守的规则：**
 
-**示例：**
+1. **Python 路径**：用 `C:\Users\honghaoxiang\.workbuddy\binaries\python\versions\3.13.12\python.exe`
+2. **输出目录默认值**：不传第三个参数时，输出到脚本所在目录的上级
+3. **运行后必须做两件事**：
+   - 启动 HTTP 服务器让用户预览（见下方"预览方法"）
+   - 对照自查表逐项检查（`references/LOTTIE_BUG_CHECKLIST.md`）
+
+## 输入要求
+
+| 条件 | 说明 | 不满足时怎么处理 |
+|------|------|-----------------|
+| 尺寸一致 | 两个 JSON 的 `w` 和 `h` 必须相同 | 脚本以文件A为准，警告用户 |
+| 格式合法 | 必须是标准 Lottie JSON（含 v/fr/w/h/layers） | 报错退出 |
+| 编码 UTF-8 | 文件编码必须是 UTF-8 | 脚本已处理，无需额外操作 |
+
+**典型输入示例**（见 `examples/` 目录）：
+- `scene-a.json` — 初始状态（如电商横幅第一屏）
+- `scene-b.json` — 变化状态（如电商横幅第二屏）
+
+## 输出物
+
+运行成功后，输出目录会生成：
+
+```
+输出目录/
+├── merged_output.json   # 合并后的 Lottie 动效文件 ← 用户最终要的这个
+└── preview.html         # 预览页面（含播放/暂停/下载按钮）
+```
+
+## 预览方法（重要！）
+
+preview.html **不能直接双击打开**，必须通过 HTTP 服务器访问：
 
 ```bash
-# 使用绝对路径
-python generate_merged_lottie.py "C:/Users/honghaoxiang/Desktop/文件A.json" "C:/Users/honghaoxiang/Desktop/文件B.json" "H:/workbuddy-ziliao/output"
+# 在输出目录启动 HTTP 服务器（端口 8770）
+cd 输出目录 && python -m http.server 8770
 
-# 使用相对路径
-python generate_merged_lottie.py ./scene1.json ./scene2.json ./output
+# 浏览器访问
+http://localhost:8770/preview.html
 ```
 
-### 输出文件
+**预览功能清单：**
+- ▶/⏸ 播放/暂停切换按钮
+- 🔄 重播按钮
+- ⏩ 0.5x / 1x / 2x 速度切换
+- 📥 下载 JSON 按钮（通过 FileSaver.js 确保文件名正确）
+- 📊 实时帧数显示
 
-运行后会在输出目录生成：
+## 工作流程（完整步骤）
 
-1. **merged_output.json** - 合并后的 Lottie 动效文件
-2. **preview.html** - 本地预览页面（自动生成）
+当用户说"帮我合并这两个 Lottie"时，按以下顺序执行：
 
-## 工作流程
-
-### 1. 准备输入文件
-
-**要求：**
-- 两个文件必须是相同尺寸（宽高一致）
-- 背景层必须完全相同（图层名、位置、锚点、缩放一致）
-- 前景元素可以有不同位置、不同内容
-
-**典型场景：**
-- 电商会场头图：背景固定，优惠信息变化
-- 广告横幅：背景固定，文案/商品变化
-- UI 动效：静态框架 + 动态内容切换
-
-### 2. 运行脚本
+### Step 1: 确认输入文件
 
 ```bash
-python generate_merged_lottie.py "场景A.json" "场景B.json" "输出目录"
+# 检查文件是否存在且是合法 Lottie JSON
+python3 -c "
+import json, sys
+for f in sys.argv[1:]:
+    try:
+        d = json.load(open(f, 'r', encoding='utf-8'))
+        print(f'✅ {f}: v={d.get(\"v\")} fr={d.get(\"fr\")} {d.get(\"w\")}x{d.get(\"h\")} layers={len(d.get(\"layers\",[]))}')
+    except Exception as e:
+        print(f'❌ {f}: {e}')
+" scene-a.json scene-b.json
 ```
 
-**脚本会自动：**
-1. 读取并解析两个 JSON 文件
-2. 合并资产（图片类自动去重，合成类前缀隔离）
-3. 识别静态图层（背景、腰封等）
-4. 识别前景变化图层
-5. 为每个前景图层生成入场/退场关键帧
-6. 构建输出 JSON
-7. 生成预览 HTML
+### Step 2: 运行脚本
 
-### 3. 预览和导出
-
-**预览：**
-- 打开 `preview.html` 在浏览器中预览（**需要通过 HTTP 服务访问**，直接双击可能因 CORS 无法加载 JSON）
-- 支持播放/暂停/重播
-- 支持 0.5x / 1x / 2x 速度切换
-- 显示当前帧数
-- CDN：优先 jsdelivr（国内稳定），备用 cdnjs
-
-**导出：**
-- 点击"下载 JSON"按钮下载 `merged_output.json`
-- 或直接从输出目录复制 `merged_output.json`
-
-**在 Lottie 中使用：**
-- 将 `merged_output.json` 导入 Lottie 播放器
-- 或集成到网页/APP 中
-
-## 动画时间轴
-
-默认时间轴设置（秒制定义，自动换算为帧）：
-
-```
-0.0-1.5s   场景 A 静置
-1.5-2.0s   场景 A 退场 + 场景 B 入场
-2.0-3.5s   场景 B 静置
-3.5-4.0s   场景 B 退场 + 场景 A 入场
-4.0-5.5s   场景 A 静置（循环点）
+```bash
+python scripts/generate_merged_lottie.py scene-a.json scene-b.json ./output
 ```
 
-**总时长：** 5.5 秒（自动根据 FPS 换算为帧数，如 100fps = 550 帧）
+### Step 3: 检查脚本输出
 
-> **A/B 对称设计：** 两画面静置时长基本相等，避免"一闪而过"感。
+脚本会在终端打印关键信息：
+```
+FPS=30  v=5.6.10  W=750  H=700
+TOTAL=150f (5.0s)
+Static (N) — 应包含背景层
+Scene A FG (M) / Scene B FG (K) — 前景变化图层
+✅ All refIds valid
+✅ 循环衔接: 为所有动画属性在 t=TOTAL 处补入首帧锚点 (共 N 处)
+```
 
-## 高级配置
+**异常信号（需要排查）：**
+- `Static (0)` 且预期应有背景 → 源文件的背景图层位置/内容不完全匹配
+- `Missing refIds` → asset 引用断裂
+- 图层数量异常少 → 可能是 ty 类型未覆盖
 
-### 修改时间轴
+### Step 4: 启动预览
 
-编辑 `generate_merged_lottie.py` 中的配置部分（秒制定义）：
+```bash
+cd ./output && python -m http.server 8770
+```
+
+浏览器打开 `http://localhost:8770/preview.html`
+
+### Step 5: 自查验证
+
+打开 `references/LOTTIE_BUG_CHECKLIST.md`，逐项核对。重点检查：
+1. 版本号是否从源文件读取（不是硬编码）
+2. 帧率是否正确
+3. 是否有 refId 缺失
+4. 循环衔接锚点是否已补入
+5. position 是否是 3 分量 [x, y, z]
+
+### Step 6: 交付用户
+
+确认无误后：
+1. 告知用户预览地址
+2. 说明如何下载 JSON
+3. 如需推送到 GitHub，确认后再推送
+
+## 核心技术约定（修改代码前必读）
+
+### 时间轴设计（V8 回归 V6 简单逻辑）
+
+```
+时间轴（秒）→ 帧数（@30fps为例）
+─────────────────────────────────────
+0.0 ──── 1.0s   场景 A 静置          (0-30f)
+1.0 ──── 1.5s   A 退场 + B 入场       (30-45f) ← 同一窗口！
+1.5 ──── 3.5s   场景 B 静置          (45-105f)
+3.5 ──── 4.0s   B 退场 + A 入场       (105-120f) ← 同一窗口！
+4.0 ──── 5.0s   场景 A 静置(循环)    (120-150f)
+─────────────────────────────────────
+总时长 5.0s，无缝循环
+```
+
+**关键原则：A 退场和 B 入场在同一窗口**，center 元素自然交叉溶解，不需要特殊处理。
+
+### 绝对禁止做的事
+
+| 禁止项 | 原因 | 正确做法 |
+|--------|------|----------|
+| 关键帧设 `h:1` | 导致渲染器不插值 | 不设置 h 属性（默认 h=0） |
+| position 用 2 元素 `[x,y]` | lottie-web 崩溃 | 始终 3 元素 `[x,y,z=0]` |
+| scale 用 2 元素 `[sx,sy]` | 同上 | 始终 3 元素 `[sx,sy,sz]` |
+| IIFE 包裹 JS 函数 | onclick 访问不到闭包变量 | 所有函数声明为全局变量 |
+| 循环衔接只做相等性检查 | 即使值相等也可能插值异常 | 无条件在 t=OP 补入首帧锚点 |
+| 硬编码版本号/帧率/尺寸 | 不同源文件参数不同 | 全部从源文件动态读取 |
+| 依赖图层名(`nm`)做匹配 | AE/Lottielab 导出后 nm 常为空 | 用 7 维度变换属性匹配 |
+
+### 图层排序规则
+
+Lottie 的 layers 数组：**index 0 = 最上层，末尾 = 最底层**
+
+```
+输出顺序：
+[0..top]     静态顶层（腰封等覆盖层，ind 小的优先）
+[top+1..mid]  Scene B 前景（B 盖住 A）
+[mid+1..bot]  Scene A 前景
+[bot+1..end]  静态底层（背景，ind 大的在后）
+```
+
+## 自定义配置
+
+如需调整动效参数，编辑 `scripts/generate_merged_lottie.py` 中的以下区域：
 
 ```python
-# 时间轴（秒）
-T_TOTAL  = 5.5   # 总时长
-T_A_END  = 1.5   # A 静置结束
-T_AB_MID = 2.0   # A→B 切换中点
-T_B_END  = 3.5   # B 静置结束（应 ≈ T_TOTAL - T_A_END，保持对称）
-T_BA_MID = 4.0   # B→A 切换中点
-```
+# === 时间轴（秒）===
+T_TOTAL  = 5.0   # 总时长
+T_A_HOLD = 1.0   # A 静置结束
+T_SWITCH1 = 1.5  # A→B 切换结束
+T_B_HOLD = 3.5   # B 静置结束
+T_SWITCH2 = 4.0  # B→A 切换结束
 
-> 所有时间参数通过 `s2f(sec)` 函数自动换算为帧数，兼容任意 FPS。
+# === 淡入淡出帧数 ===
+FADE = 8         # opacity 过渡帧数
 
-### 修改画布尺寸
-
-```python
-CANVAS_W = 1125  # 画布宽度
-CANVAS_H = 566   # 画布高度
-FPS = 30          # 帧率
-```
-
-### 修改缓动曲线
-
-```python
-EASE_OUT   = {"x": [0.333], "y": [0]}   # 标准缓出
-EASE_IN    = {"x": [0.667], "y": [1]}   # 标准缓入
+# === 缓动曲线 ===
+EASE_OUT     = {"x": [0.333], "y": [0.0]}
+EASE_IN      = {"x": [0.667], "y": [1.0]}
 EASE_SNAPPY_I = {"x": [0.667], "y": [0.667]}  # 弹性缓入
 EASE_SNAPPY_O = {"x": [0.333], "y": [0.333]}  # 弹性缓出
 ```
 
-## 技术细节
-
-### 静态图层识别规则
-
-两个文件的图层满足以下**所有条件**时，被认为是静态图层（不变元素）：
-
-1. 图层类型（`ty`）相同
-2. 父级图层（`parent`）相同
-3. 旋转角度（`rotation`）相同（容差 < 0.01°）
-4. 位置（`position`）相同（容差 < 2px）
-5. 锚点（`anchor`）相同（容差 < 0.1px）
-6. 缩放（`scale`）相同（容差 < 0.1%）
-7. asset 内容相同（图片：base64 前80字符；形状层：变换一致即视为相同）
-
-> 注意：不依赖图层名（`nm`）识别静态图层，因为 LottieLab/AE 导出后 `nm` 常为空字符串。
-
-### 前景图层动画规则
-
-**入场动画：**
-- 元素从画布外飞入
-- 方向自动判断（左/右/下/中）
-- 有弹性过冲效果（overshoot + bounce 回弹）
-- **尺寸感知弹性**：小元素弹得更夸张（10%），大元素柔和（3%）
-- 支持错帧延迟（高处元素先入场，产生波浪感）
-
-**退场动画：**
-- 元素飞出画布
-- 同步淡出
-
-**center 方向特殊处理（交叉溶解）：**
-- center 方向的元素位置不变（在画面中央），不做位移动画
-- A 退场的同时 B 就开始入场（反向渐变），无空窗期闪烁
-- 非方向元素则按标准时间线依次入场/退场
-
-### 图层排序规则
-
-输出 JSON 的图层数组顺序（Lottie 规范：数组首位 = 最上层）：
+## 目录结构
 
 ```
-[0..n]       静态顶层（腰封等，永远最上）
-[n+1..m]    场景 B 前景（B 盖住 A）
-[m+1..k]    场景 A 前景
-[k+1..end]  静态底层（背景，永远最下）
-```
-
-### 父子关系（Parent）处理
-
-- 保留源文件的 `parent` 属性
-- 重新编号后自动 remap `parent` 引用
-- 跨场景的父子关系会自动处理
-
-## 支持的文件格式
-
-**输入：**
-- Lottie JSON 格式（.json）
-- 支持图像图层（ty=2）
-- 支持形状图层（ty=4）
-- 支持合成图层（ty=0）
-- 支持空对象（ty=3）
-
-**输出：**
-- Lottie JSON 格式（.json）
-- 兼容 Lottie 5.6.10+
-- 支持 SVG / Canvas / HTML 渲染
-
-## 常见问题
-
-### Q: 提示 "KeyError: ('a', '')" 怎么办？
-
-**A:** 某些图层没有 `refId`。已修复，脚本现在会自动处理无 `refId` 的图层。
-
-### Q: 生成的动画位置不对？
-
-**A:** 检查源文件的锚点（`anchor`）是否正确。锚点影响图层的旋转/缩放中心。
-
-### Q: 如何调整动画速度？
-
-**A:** 
-- 预览时点击 0.5x / 1x / 2x 按钮
-- 或修改 `FPS` 和 `TOTAL_FRAMES` 配置
-
-### Q: 如何添加更多动效效果？
-
-**A:** 修改 `build_pos_kfs()` 和 `build_opacity_kfs()` 函数，自定义关键帧生成逻辑。
-
-## 自查表
-
-生成后务必检查以下项目（详细见 `LOTTIE_BUG_CHECKLIST.md`）：
-
-- [ ] 图层元数据完整（position/anchor/scale/rotation/parent/cl）
-- [ ] 静态图层识别准确（无漏识/误识）
-- [ ] 关键帧按 `t` 升序排列
-- [ ] 无 `h:1` 关键帧（会导致不插值）
-- [ ] 退场 opacity 已生成（不受 initial_visible 影响）
-- [ ] 飞行距离基于视觉边界计算
-- [ ] 图层排序正确（背景在末尾）
-- [ ] parent 已 remap
-- [ ] 资产已去重
-- [ ] 首尾帧状态一致（可循环）
-
-## 文件和目录结构
-
-```
-lottie-merge-anim/
-├── SKILL.md                    # Skill 说明文档
-├── generate_merged_lottie.py   # 主脚本
-├── LOTTIE_BUG_CHECKLIST.md    # AI 自查表
-└── examples/                   # 示例文件（可选）
-    ├── example1-A.json
-    ├── example1-B.json
-    └── example1-output.json
+jd-lottie-anim-extension/
+├── SKILL.md                        # 本文件（AI 指令）
+├── README.md                       # 人读文档（GitHub 展示用）
+├── LICENSE                         # MIT 协议
+├── scripts/
+│   └── generate_merged_lottie.py   # 主脚本
+├── references/
+│   ├── .gitkeep
+│   └── LOTTIE_BUG_CHECKLIST.md    # 自查表（生成后逐项核对）
+└── examples/
+    ├── .gitkeep
+    ├── scene-a.json                # 示例：初始状态
+    ├── scene-b.json                # 示例：变化状态
+    ├── expected-output.json        # 示例：预期输出
+    └── preview.html                # 示例：预览页面
 ```
 
 ## 版本历史
 
-**V7.2 (2026-06-26):**
-- **center 方向元素交叉溶解**：A退场时B同步入场，消除空窗期闪烁（如画面中央文案消失几帧的问题）
-- **时间轴对称**：A/B 静置时长基本相等（不再出现 A 0.2s vs B 3.5s 的极端不对称）
-- **预览 CDN 修复**：优先 jsdelivr + cdnjs 备用，解决国内环境白屏问题
-- **下载按钮修复**：`<a>` 元素先挂载 DOM 再触发 click，确保浏览器不拦截
-- **尺寸感知弹性**：小元素 overshoot 10%，中 6%，大 3%
-- **垂直位置错帧**：高处元素先入场（非纯索引顺序）
+| 版本 | 日期 | 主要变更 |
+|------|------|----------|
+| V8.0 | 2026-06-29 | 预览优化：播放/暂停合并为toggle按钮；下载改用FileSaver.js修复文件名乱码；回归V6简单时间轴消除闪烁；重构skill为标准目录结构 |
+| V7.x | 2026-06-24~26 | 7维度静态识别、center交叉溶解、CDN修复、IIFE闭包问题、循环衔接无条件锚点 |
+| V6 | 2026-06-18 | position/scale 3分量修复、视觉边界飞行距离、弹性缓动曲线 |
+| V1-V5 | 2026-06-17~18 | 基础功能、parent保留、anchor/rotation/cl修复 |
 
-**V7.1 (2026-06-24):**
-- 静态图层识别：7 维度完全匹配
-- 图片 Asset 按 base64 签名去重
-- 恢复 V6 弹性动效参数
+## 排错速查
 
-**V7 (2026-06-24):**
-- 静态图层识别：7 维度完全匹配（ty/parent/anchor/scale/rotation/position/asset内容），不再依赖图层名
-- Asset 去重：图片类按 base64 内容签名去重，合成类保持前缀隔离
-- 恢复 V6 动效参数：弹性缓动曲线 + 动态飞行距离 + overshoot/bounce
-- 时间轴改为秒制定义，s2f() 自动换算，兼容任意帧率
-- 方向判断阈值改为画布比例（W*0.3 等），弃用绝对像素
-- 保留源文件版本号/画布尺寸，不再硬编码
-- 自动生成含播放器+速度控制+下载按钮的预览 HTML
-
-**V4 (2026-06-18):**
-- 支持命令行参数输入文件
-- 支持无 `refId` 的图层类型（形状图层等）
-- 改进错误处理
-
-**V3 (2026-06-17):**
-- 保留 parent 父子关系
-- 保留 rotation 旋转属性
-- 保留 cl 混合模式
-- 修复图层排序
-- 修复锚点丢失
-
-**V2 (2026-06-17):**
-- 修复关键帧排序
-- 移除 `h:1` 属性
-- 修复飞行距离计算
-
-**V1 (2026-06-17):**
-- 初始版本
-- 基本合并功能
-- 静态图层识别
-
-## 授权和引用
-
-- 本 Skill 由 WorkBuddy 生成
-- 使用 Lottie 开源格式
-- lottie-web: https://github.com/airbnb/lottie-web
-
----
-
-**有问题或建议？** 请联系 honghaoxiang 或提交 GitHub issue。
+| 症状 | 最可能原因 | 解决方法 |
+|------|-----------|---------|
+| 预览白屏 | CDN 加载失败 | 检查网络；预览页有双CDN兜底 |
+| 按钮无效 | JS 函数在 IIFE 内 | 确认所有函数是全局声明 |
+| 闪烁 | 循环衔接缺锚点 | 确认 t=OP 处有无条件首帧锚点 |
+| 元素位置偏移 | anchor 丢失或2元素position | 检查源文件anchor是否保留、position是否3元素 |
+| 下载文件名乱码 | blob URL 的 a.download 失效 | 使用 FileSaver.js 的 saveAs() |
+| 背景消失 | 背景被识别为前景 | 检查两源文件的背景层位置/内容是否完全匹配 |

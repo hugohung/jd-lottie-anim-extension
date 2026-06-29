@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>Lottie 切换动效预览</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:-apple-system,sans-serif;color:#eee}
+h2{margin-bottom:16px;font-weight:400;color:#aaa;font-size:16px}
+#lc{width:562px;height:300px;background:#222;border-radius:8px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.ctl{margin-top:20px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center}
+button{padding:8px 20px;border:1px solid #555;border-radius:6px;background:#2a2a4a;color:#eee;cursor:pointer;font-size:14px}
+button:hover{background:#3a3a6a}
+.sp button{background:#222}.sp button.active{background:#5a5aff;border-color:#5a5aff}
+#dl-btn{background:#1a4a2a;border-color:#2a7a4a;color:#7ef5a0}
+#dl-btn:hover{background:#1e5a32}
+#fi,#st{font-size:13px;margin-top:10px;min-height:20px}
+</style></head>
+<body>
+<h2>Lottie 切换动效预览</h2>
+<div id="lc"></div>
+<div class="ctl">
+  <button onclick="doToggle()" id="btnToggle">&#9208; 暂停</button>
+  <button onclick="doReplay()">&#8634; 重播</button>
+  <div class="sp">
+    <button onclick="ss(0.5)" id="s05">0.5x</button>
+    <button onclick="ss(1)" id="s10" class="active">1x</button>
+    <button onclick="ss(2)" id="s20">2x</button>
+  </div>
+  <button id="dl-btn" onclick="dlJson()">&#11015; 下载 JSON</button>
+</div>
+<div id="fi"></div>
+<div id="st" style="color:#ff8">加载中...</div>
+<script>
+// 全局变量（onclick 必须能访问到）
+var st = document.getElementById('st');
+var fi = document.getElementById('fi');
+var anim = null;
+var jsonData = null;
+
+var CDN_URLS = [
+  "https://cdn.jsdelivr.net/npm/lottie-web@5.12.2/build/player/lottie.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"
+];
+var FSAVER_URLS = [
+  "https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"
+];
+var cdnIdx = 0;
+
+function doToggle() {
+  if (!anim) return;
+  var btn = document.getElementById('btnToggle');
+  if (anim.isPaused) {
+    anim.play();
+    btn.innerHTML = '&#9208; 暂停';
+  } else {
+    anim.pause();
+    btn.innerHTML = '&#9654; 播放';
+  }
+}
+function doReplay() {
+  if (anim) {
+    anim.goToAndPlay(0, true);
+    document.getElementById('btnToggle').innerHTML = '&#9208; 暂停';
+  }
+}
+function ss(s) {
+  if (anim) anim.setSpeed(s);
+  document.querySelectorAll('.sp button').forEach(function(b) {
+    b.classList.remove('active');
+  });
+  var btnId = 's' + (s + '').replace('.', '0');
+  var btn = document.getElementById(btnId);
+  if (btn) btn.classList.add('active');
+}
+function dlJson() {
+  if (!jsonData) { alert('JSON 尚未加载完成'); return; }
+  var data = JSON.stringify(jsonData, null, 2);
+  // 用 FileSaver.js saveAs() 确保文件名正确（原生 a.download 对 blob URL 可能失效）
+  var blob = new Blob([data], {type: 'application/json;charset=utf-8'});
+  if (typeof saveAs === 'function') {
+    saveAs(blob, 'merged_output.json');
+  } else {
+    // FileSaver 未加载时的降级方案
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'merged_output.json';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function() {
+      if (a.parentNode) document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 2000);
+  }
+}
+
+function loadCdn(cb) {
+  var s = document.createElement('script');
+  s.src = CDN_URLS[cdnIdx];
+  s.onload = function() { cb(null); };
+  s.onerror = function() {
+    cdnIdx++;
+    if (cdnIdx < CDN_URLS.length) {
+      loadCdn(cb);
+    } else {
+      cb(new Error('所有CDN均失败'));
+    }
+  };
+  document.head.appendChild(s);
+}
+
+function loadFileSaver(cb) {
+  var fsIdx = 0;
+  function tryNext() {
+    var s = document.createElement('script');
+    s.src = FSAVER_URLS[fsIdx];
+    s.onload = function() { cb(null); };
+    s.onerror = function() {
+      fsIdx++;
+      if (fsIdx < FSAVER_URLS.length) {
+        tryNext();
+      } else {
+        cb(new Error('FileSaver CDN 失败（降级使用原生下载）'));
+      }
+    };
+    document.head.appendChild(s);
+  }
+  tryNext();
+}
+
+function initAnimation() {
+  try {
+    anim = lottie.loadAnimation({
+      container: document.getElementById('lc'),
+      renderer: 'svg',
+      loop: true,
+      autoplay: true,
+      animationData: jsonData
+    });
+    anim.addEventListener('enterFrame', function() {
+      fi.textContent = '帧: ' + Math.round(anim.currentFrame) + ' / ' + anim.totalFrames;
+    });
+    anim.addEventListener('data_ready', function() {
+      st.style.color = '#8f8';
+      st.textContent = '✅ 加载完成，正在播放...';
+    });
+    anim.addEventListener('data_failed', function() {
+      st.style.color = '#f88';
+      st.textContent = '❌ 数据解析失败';
+    });
+    anim.addEventListener('error', function(e) {
+      st.style.color = '#f88';
+      st.textContent = '渲染错误: ' + (e.error ? e.error.message : JSON.stringify(e));
+    });
+  } catch(e) {
+    st.style.color = '#f88';
+    st.textContent = '初始化失败: ' + e.message;
+  }
+}
+
+// 第一步：fetch 加载 JSON（加时间戳破坏浏览器缓存）
+var ts = new Date().getTime();
+st.textContent = '正在加载动画数据...';
+fetch('merged_output.json?t=' + ts)
+  .then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  })
+  .then(function(d) {
+    jsonData = d;
+    st.textContent = 'Lottie库加载中...';
+    // 第二步：加载 lottie-web
+    loadCdn(function(err) {
+      if (err) {
+        st.style.color = '#f88';
+        st.textContent = '❌ Lottie库加载失败: ' + err.message + ' (请检查网络或刷新重试)';
+        return;
+      }
+      if (typeof lottie === 'undefined') {
+        st.style.color = '#f88';
+        st.textContent = '❌ Lottie对象未定义';
+        return;
+      }
+      initAnimation();
+      // 预加载 FileSaver.js（下载功能需要）
+      loadFileSaver(function() {});
+    });
+  })
+  .catch(function(err) {
+    st.style.color = '#f88';
+    st.textContent = '❌ 数据加载失败: ' + err.message;
+  });
+</script>
+</body></html>

@@ -3,7 +3,7 @@
 > 每次生成或修改 merged Lottie JSON 后，按此表逐项自查。
 > 后续出现新问题，追加到对应分类下并更新版本号。
 
-**版本**: v1.3 | **日期**: 2026-06-26
+**版本**: v1.4 | **日期**: 2026-06-29
 
 ---
 
@@ -83,8 +83,9 @@
 
 | # | 检查项 | 症状 | 根因 | 检查方式 |
 |---|--------|------|------|----------|
-| 7.1 | **frame 0 和最后一帧状态一致** | 循环跳跃/闪烁 | Scene A 入场未完成，最后一帧和第一帧不同 | 最后一帧 Scene A 所有元素已到达静置位置，opacity=100 |
+| 7.1 | **frame 0 和最后一帧状态一致（无条件锚点）** | 循环跳跃/闪烁；即使数据值相等也可能因插值异常闪烁 | 仅检查 `v_start == v_last` 不够，lottie 在 OP 跳回 IP 时需要显式锚点 | **无条件**为每个动画属性在 `t=OP` 处补入一个关键帧（值 = t=0 的值），不判断是否相等；输出日志应报告补入的锚点数量 |
 | 7.2 | **totalFrames 足够容纳完整动效** | 动效未播完就跳到开头 | op 设置过小 | `op >= entry_end + hold_duration` |
+| 7.3 | **center 元素交叉溶解不产生空窗期** | 文案/中心内容短暂消失（"闪一下"）| A 消失后 B 延迟才出现（或反向）| crossfade 窗口对齐 non-center 飞入时间(cf_ab_s=F_B_ENTER_S)，A/B 同时刻反向渐变，零透明度重叠 |
 
 ---
 
@@ -97,7 +98,8 @@
 | 8.3 | **opacity keyframe s 值为单元素数组** | 渲染器报错 | s 值为裸数字 `100` | `s` 始终为数组 `[100]` 或 `[0]` |
 | 8.4 | **`build_fg_keyframes` 中转时字段完整性** | 渲染器卡死（形状层/预合成层结构不完整） | 该函数创建新字典时只复制了部分字段，`shapes`/`w`/`h` 在中转过程中丢失 | `build_fg_keyframes` 返回的每个元素必须包含 `shapes`（ty=4 时）和 `w`/`h`（ty=0 时），与 `extract_layer_meta` 提取的字段一一对应 |
 | 8.5 | **预览 HTML CDN 可用性** | 预览页面空白/卡在"加载中" | 使用 cdnjs.cloudflare.com 在国内企业网被墙/超时，lottie 库无法加载 | 优先 jsdelivr + cdnjs 备用；用 fetch 异步加载 JSON（非内嵌） |
-| 8.6 | **预览下载按钮可用性** | 点击下载按钮无反应 | `<a>` 元素未添加到 DOM 就触发 click，浏览器阻止 | `document.body.appendChild(a)` 后再 `a.click()`；100ms 后 cleanup |
+| 8.6 | **预览下载按钮可用性 + 全局作用域** | 点击下载/播放/暂停等所有按钮均无反应 | ① `<a>` 未 appendChild 到 DOM 就 click；② anim/ss/dlJson 被包在 IIFE 闭包内，onclick 访问不到局部变量 | **①** `document.body.appendChild(a)` 后再 `a.click()`；**②** 禁用 IIFE，所有 onclick 调用的函数必须是全局变量（`var anim=null` 在顶层作用域） |
+| 8.7 | **预览 JS 不使用 IIFE 闭包** | 所有按钮失效（播放/暂停/下载/速度切换全部不响应） | `anim`/`ss`/`dlJson`/`doPlay`/`doPause`/`doReplay` 定义在 `(function(){...})()` 内部，HTML 的 `onclick="..."` 只能访问全局作用域 | 预览 HTML 的 `<script>` 中直接声明全局变量和全局函数，不用 IIFE 包装 |
 
 ---
 
@@ -116,6 +118,7 @@
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v1.4 | 2026-06-29 | **新增 7.3（crossfade零空窗）+ 8.7（IIFE闭包导致所有按钮失效）**；修下载按钮(window.open兜底)；加循环衔接自动验证+修正逻辑；non-center opacity与position窗口对齐 |
 | v1.3 | 2026-06-26 | **新增 3.7（center元素交叉溶解防闪烁）+ 3.8（时间轴对称）+ 8.5（CDN可用性）+ 8.6（下载按钮DOM修复）**；修复预览空白(CDN)、文案闪烁(空窗期)、下载失效(未挂DOM) |
 | v1.2 | 2026-06-18 | **新增 1.7/1.8（shapes/w/h 字段提取）+ 8.4（build_fg_keyframes 中转字段完整性）**，修复 LottieLab 导出文件合并后白屏/卡死问题（根因确认） |
 | v1.1 | 2026-06-18 | 修正 8.2：position/anchor 必须是3元素 [x,y,z]，2元素会导致 lottie-web 崩溃（根因确认） |
