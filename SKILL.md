@@ -1,7 +1,7 @@
 ---
 name: jd-lottie-anim-extension
 description: 将两个静帧 Lottie JSON 合并为带切帧动效的 Lottie JSON，分阶段流水线架构，自动分组+弹性动效+预览模板。
-version: "9.4.0"
+version: "9.5.0"
 author: honghaoxiang
 agent_created: true
 trigger:
@@ -347,6 +347,7 @@ jd-lottie-anim-extension/
 
 | 版本 | 日期 | 主要变更 |
 |------|------|----------|
+| V9.5 | 2026-06-30 | **Stage 0 图片格式自动修复**：检测 WebP 图片被误标为 PNG 的问题，自动纠正 MIME 类型并转为真实 PNG；若实际图片尺寸与 asset 中记录的 w/h 不一致，自动缩放至目标尺寸（修复满宽元素边缘被裁剪的核心元凶） |
 | V9.4 | 2026-06-30 | **展示阶段动效定稿**：参数化指定 `--deco` 装饰元素和 `--highlight` 突出元素；装饰元素匀速环形晃动+持续旋转（线性缓动，参考0610.json画画/植物）；突出元素缩放两下 100%-120%（以图片中心为缩放中心）；删除自动识别（避免空名误伤），改为提问确认+参数指定；embedded预览改本地依赖（自动下载 lottie.min.js/FileSaver.min.js，无需联网）；修复 `_build_pos/rot_kfs_style` 中 `in_start == windup_dur_f` 导致 t=0 重复关键帧的 bug；移除预览容器 `#lc` 的 `border-radius` 避免满宽元素（如腰带）被裁切 |
 | V9.3 | 2026-06-30 | **全面fps自适应**：退场蓄力下限max(2帧)改T_WINDUP_MIN秒定义；淡入淡出0.07/0.10硬编码改T_FADE常量；最小展示0.6硬编码改T_MIN_HOLD常量；废弃_calc_stagger_ref改秒定义；30fps+100fps交叉验证节奏一致 |
 | V9.2 | 2026-06-30 | **fps自适应+静态识别修复**：所有时长改秒定义按fps换算（修复100fps下节奏太快/蓄力不可见）；静态识别改用asset尺寸(aw/ah)代替base64比对（修复lottielab重导出导致的漏判）；分组bug修复（空名nm做dict key互相覆盖导致所有元素同方向） |
@@ -375,6 +376,7 @@ jd-lottie-anim-extension/
 | **蓄力看不见** | 蓄力时长固定2f，高fps下<0.03s | V9.2已修：T_WINDUP=0.08s，按fps换算 |
 | **静态层被赋予动效** | base64不一致导致漏判 | V9.2已修：改用 asset尺寸(aw/ah) 判断静态 |
 | **所有元素同方向** | 图层名为空时nm做dict key互相覆盖 | V9.2已修：_auto_group直接设图层属性 |
+| **满宽素材边缘被裁剪 👈 核心元凶** | 源文件 WebP 图片被误标为 PNG，且实际尺寸 < asset 记录的 w/h → 渲染器无法正确拉伸 | **V9.5 自动修复**：Stage 0 检测 WebP → 缩放至目标尺寸 → 转 PNG |
 
 ## 备份与回滚
 

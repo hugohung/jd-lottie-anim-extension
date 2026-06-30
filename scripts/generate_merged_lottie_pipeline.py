@@ -1,5 +1,5 @@
 """
-Lottie 静帧合并动效 — 分阶段流水线版（V8.1-pipeline）
+Lottie 静帧合并动效 — 分阶段流水线版（V9.5）
 
 架构：6 阶段解耦流水线，每阶段独立函数 + 中间产物 + 自检 + 局部重跑
   Stage 0 Parse     — 读 JSON · 规范化变换属性 · asset 去重
@@ -128,6 +128,39 @@ def _extract_layer(layer, id_map):
         'td':     layer.get('td'),
     }
 
+def _fix_asset_images(assets_list):
+    """修复 WebP 图片被误标为 PNG 的问题：检测真实格式，纠正 MIME 类型，
+    若实际尺寸与记录不匹配则缩放，统一转为 PNG。"""
+    try:
+        from PIL import Image
+    except ImportError:
+        return
+    import base64 as _b64, io as _io
+
+    for a in assets_list:
+        wid = int(a.get('w', a.get('aw', 0)))
+        hei = int(a.get('h', a.get('ah', 0)))
+        p = a.get('p', '')
+        if not (wid and hei and isinstance(p, str) and p.startswith('data:image')):
+            continue
+        try:
+            raw = _b64.b64decode(p.split(',', 1)[1])
+        except Exception:
+            continue
+        if raw[:4] != b'RIFF':  # 非 WebP 不处理
+            continue
+        try:
+            img = Image.open(_io.BytesIO(raw))
+            aw, ah = img.size
+            if aw != wid or ah != hei:
+                img = img.resize((wid, hei), Image.LANCZOS)
+            buf = _io.BytesIO()
+            img.save(buf, format='PNG', optimize=True)
+            a['p'] = f'data:image/png;base64,{_b64.b64encode(buf.getvalue()).decode("ascii")}'
+        except Exception:
+            pass
+
+
 def _get_asset_sig(assets_list, ref_id):
     for a in assets_list:
         if a.get('id') == ref_id:
@@ -146,6 +179,10 @@ def stage_parse(file_a, file_b):
     """Stage 0: 读取两个源 JSON，规范化图层，asset 去重"""
     with open(file_a, encoding='utf-8') as f: src_a = json.load(f)
     with open(file_b, encoding='utf-8') as f: src_b = json.load(f)
+
+    # 修复 WebP 被误标为 PNG / 尺寸不一致的问题（V9.5）
+    _fix_asset_images(src_a.get('assets', []))
+    _fix_asset_images(src_b.get('assets', []))
 
     FPS = max(src_a.get('fr', 30), src_b.get('fr', 30))
     W   = src_a.get('w', 1125)
