@@ -1530,9 +1530,9 @@ button:hover{background:#3a3a6a}
   <button onclick="doToggle()" id="btnToggle">&#9208; 暂停</button>
   <button onclick="doReplay()">&#8634; 重播</button>
   <div class="sp">
-    <button onclick="ss(0.5)" id="s05">0.5x</button>
-    <button onclick="ss(1)" id="s10" class="active">1x</button>
-    <button onclick="ss(2)" id="s20">2x</button>
+    <button onclick="ss(0.5)" id="s0.5">0.5x</button>
+    <button onclick="ss(1)" id="s1" class="active">1x</button>
+    <button onclick="ss(2)" id="s2">2x</button>
   </div>
   <button id="dl-btn" onclick="dlJson()">&#11015; 下载 JSON</button>
 </div>
@@ -1551,7 +1551,7 @@ var cdnIdx = 0;
 
 function doToggle() { if (!anim) return; var btn = document.getElementById('btnToggle'); if (anim.isPaused) { anim.play(); btn.innerHTML = '&#9208; 暂停'; } else { anim.pause(); btn.innerHTML = '&#9654; 播放'; } }
 function doReplay() { if (anim) { anim.goToAndPlay(0, true); document.getElementById('btnToggle').innerHTML = '&#9208; 暂停'; } }
-function ss(s) { if (anim) anim.setSpeed(s); document.querySelectorAll('.sp button').forEach(function(b) { b.classList.remove('active'); }); var btnId = 's' + (s + '').replace('.', '0'); var btn = document.getElementById(btnId); if (btn) btn.classList.add('active'); }
+function ss(s) { if (anim) anim.setSpeed(s); document.querySelectorAll('.sp button').forEach(function(b) { b.classList.remove('active'); }); var btnId = 's' + s; var btn = document.getElementById(btnId); if (btn) btn.classList.add('active'); }
 function dlJson() {
   if (!jsonData) { alert('JSON 尚未加载完成'); return; }
   var data = JSON.stringify(jsonData, null, 2);
